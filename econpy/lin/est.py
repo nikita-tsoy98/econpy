@@ -1,240 +1,320 @@
-import numpy as np
+from collections.abc import Callable
+from typing import Optional
+from torch import Tensor
+
+import torch
 from econpy.lin import err
 
 
-def ols(Y, X, get_err_fn=err.hc1, ddof=0):
+def no_reg(cov_xx: Tensor) -> Tensor:
     """
-    Get OLS estimate of the model ``Y = prm @ X + Y_err``
+    Dummy regularization of covariance matrix
+    
+    Parameters
+    ----------
+    cov_xx: Tensor
+        Covarinace matrix for regularization
+    
+    Returns
+    -------
+    cov_xx: Tensor
+        Covariance matrix after regularization
+    """
+    return cov_xx
+
+
+def ridge_reg(cov_xx: Tensor, a: float = 2**(-7)) -> Tensor:
+    """
+    Ridge-like regularization of covariance matrix
 
     Parameters
     ----------
-    Y : ndarray(m, n)
+    cov_xx: Tensor
+        Covarinace matrix for regularization
+    a: float
+        Strength of regularization
+    
+    Returns
+    -------
+    cov_xx: Tensor
+        Covariance matrix after regularization
+    """
+    diag_x = cov_xx.diagonal()
+    with torch.no_grad():
+        diag_x += a * torch.linalg.matrix_norm(cov_xx, 2)
+        cov_xx.div_(1 + a)
+    return cov_xx
+
+
+def ols(
+        y: Tensor, x: Tensor,
+        reg_fn: Callable[[Tensor], Tensor] = no_reg
+        ) -> tuple[Tensor, Tensor, Tensor]:
+    """
+    Get OLS estimate of the model ``y = prm_yx @ x + res_y``
+
+    Parameters
+    ----------
+    y: Tensor(m, n)
         Vector of dependent variables of shape ``(m, n)``, where ``m`` is the
         number of dependent variables and ``n`` is the number of observations
-    X : ndarray(d, n)
+    x: Tensor(d, n)
         Vector of regressors of shape ``(d, n)``, where ``d`` is the
         number of regressors and ``n`` is the number of observations
-    get_err_fn : function ((m, n), (d, d), (d, n), int) -> (m, d, d)
-        Error function
-    ddof : int
-        Additional degrees of freedom that will be used to calculate errors
+    reg_fn: Callable[[Tensor], Tensor]
+        Function for covarinace matrix regularization
 
     Returns
     -------
-    prm : ndarray(m, d)
+    prm_yx: Tensor(m, d)
         Estimate of parameter vector
-    prm_err : ndarray(m, d, d)
-        Estimate of parameter vector variance
+    y_hat: Tensor(m, n)
+        Estimate of dependent variables
+    inv_xx: Tensor(d, d)
+        Inverse of covariance matrix of regressors
 
     Examples
     --------
-    >>> import econpy as ep
-    >>> import numpy as np
-    >>> n, d = 1001, 2
-    >>> rng = np.random.default_rng(179)
-    >>> X = rng.standard_normal((d, n))
-    >>> b = np.array([[1., 2.]])
-    >>> Y_err = rng.standard_normal((1, n))
-    >>> Y = b @ X + Y_err
-    >>> ep.lin.est.ols(Y, X, ep.lin.err.hc1)
-    (array([[1.04029972, 2.00481945]]),
-    array([[[9.01651519e-04, 7.89637346e-05],
-            [7.89637346e-05, 8.96064163e-04]]]))
-
     """
-    inv_cov = np.linalg.inv(np.inner(X, X))
-    prm = np.inner(Y, X) @ inv_cov
-    res = Y - prm @ X
-    prm_err = get_err_fn(res, inv_cov, X, prm.size + ddof)
-    return prm, prm_err
+    inv_xx = torch.linalg.inv(reg_fn(torch.mm(x, x.T)))
+    prm_yx = torch.mm(torch.mm(y, x.T), inv_xx)
+    y_hat = torch.mm(prm_yx, x)
+    return prm_yx, y_hat, inv_xx
 
 
-def wls(Y, X, w, get_err_fn=err.hc1, ddof=0):
+def tsls(
+        y: Tensor, x: Tensor, z: Tensor,
+        reg_fn: Callable[[Tensor, Callable], Tensor] = no_reg
+        ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """
-    Get WLS estimate of the model ``Y = prm @ X + Y_err``
+    Get TSLS estimate of the model
+    ``y = prm_yx @ x + res_y, x = prm_xz @ z + res_x``
 
     Parameters
     ----------
-    Y : ndarray(m, n)
+    y: Tensor(m, n)
         Vector of dependent variables of shape ``(m, n)``, where ``m`` is the
         number of dependent variables and ``n`` is the number of observations
-    X : ndarray(d, n)
+    x: Tensor(d, n)
         Vector of regressors of shape ``(d, n)``, where ``d`` is the
         number of regressors and ``n`` is the number of observations
-    w : ndarray(n)
-        Vector of weights of shape ``(n,)``, where ``n`` is the number of
-        observations
-    get_err_fn : function ((m, n), (d, d), (d, n), int) -> (m, d, d)
-        Error function
-    ddof : int
-        Additional degrees of freedom that will be used to calculate errors
-
-    Returns
-    -------
-    prm : ndarray(m, d)
-        Estimate of parameter vector
-    prm_err : ndarray(m, d, d)
-        Estimate of parameter vector variance
-
-    Examples
-    --------
-    >>> import econpy as ep
-    >>> import numpy as np
-    >>> n, d = 1001, 2
-    >>> rng = np.random.default_rng(179)
-    >>> X = rng.standard_normal((d, n))
-    >>> b = np.array([[1., 2.]])
-    >>> w = rng.uniform(0, 1, n)
-    >>> Y_err = rng.standard_normal((1, n))
-    >>> Y = b @ X + Y_err
-    >>> ep.lin.est.wls(Y, X, w, ep.lin.err.hc1)
-    (array([[1.01209159, 1.99392029]]),
-    array([[[1.19092651e-03, 9.15351248e-05],
-            [9.15351248e-05, 1.19738269e-03]]]))
-
-    """
-    sqrt_w = np.sqrt(w)
-    return ols(sqrt_w * Y, sqrt_w * X, get_err_fn, ddof)
-
-
-def tsls(Y, X, Z, get_err_fn=err.hc1, ddof=0):
-    """
-    Get TSLS estimate of the model ``Y = prm @ X + Y_err, X = prm_f @ Z + X_err``
-
-    Parameters
-    ----------
-    Y : ndarray(m, n)
-        Vector of dependent variables of shape ``(m, n)``, where ``m`` is the
-        number of dependent variables and ``n`` is the number of observations
-    X : ndarray(d, n)
-        Vector of regressors of shape ``(d, n)``, where ``d`` is the
-        number of regressors and ``n`` is the number of observations
-    Z : ndarray(r, n)
+    z: Tensor(r, n)
         Vector of instruments of shape ``(r, n)``, where ``r`` is the
         number of instruments and ``n`` is the number of observations
-    get_err_fn : function ((m, n), (d, d), (d, n), int) -> (m, d, d)
-        Error function
-    ddof : int
-        Additional degrees of freedom that will be used to calculate errors
+    reg_fn: Callable[[Tensor], Tensor]
+        Function for covarinace matrix regularization
 
     Returns
     -------
-    prm : ndarray(m, d)
+    prm_yx: Tensor(m, d)
         Estimate of parameter vector
-    prm_err : ndarray(m, d, d)
-        Estimate of parameter vector variance
-    prm_f : ndarray(d, r)
+    prm_xz: Tensor(d, r)
         Estimate of parameter vector for the first stage
-    prm_f_err : ndarray(d, r, r)
-        Estimate of parameter vector variance for the first stage
+    y_hat: Tensor(m, n)
+        Estimate of dependent variables
+    x_hat: Tensor(d, n)
+        Estimate of endogenous variables
+    inv_xx: Tensor(d, d)
+        Inverse of covariance matrix of regressors
+    inv_zz: Tensor(r, r)
+        Inverse of covariance matrix of instruments
 
     Examples
     --------
-    >>> import econpy as ep
-    >>> import numpy as np
-    >>> n, r, d = 1001, 3, 2
-    >>> rng = np.random.default_rng(179)
-    >>> Z = rng.standard_normal((r, n))
-    >>> g = np.array([[1., 2., 0.],
-                      [0., 1., 1.]])
-    >>> b = np.array([[1., 2.]])
-    >>> X_err = rng.standard_normal((d, n))
-    >>> X = g @ Z + X_err
-    >>> Y_err = rng.standard_normal((1, n))
-    >>> Y = (b @ g) @ Z + Y_err
-    >>> ep.lin.est.tsls(Y, X, Z, ep.lin.err.hc1)
-    (array([[1.02661761, 1.99233687]]),
-    array([[[ 0.00160102, -0.00174609],
-            [-0.00174609,  0.00496165]]]),
-    array([[9.84476024e-01, 2.01435404e+00, 1.79104118e-02],
-            [4.69398516e-04, 9.72084169e-01, 9.65296423e-01]]),
-    array([[[ 9.41789054e-04,  5.53232016e-05,  6.52132465e-05],
-            [ 5.53232016e-05,  8.67519282e-04, -9.57919621e-06],
-            [ 6.52132465e-05, -9.57919621e-06,  9.83312340e-04]],
-    
-            [[ 8.88927449e-04, -4.97567021e-05,  7.62662634e-05],
-            [-4.97567021e-05,  9.44267008e-04,  7.22023295e-05],
-            [ 7.62662634e-05,  7.22023295e-05,  9.96610029e-04]]]))
-
     """
     # first stage
-    inv_cov_f = np.linalg.inv(np.inner(Z, Z))
-    cov_XZ = np.inner(X, Z)
-    prm_f = cov_XZ @ inv_cov_f
-    X_hat = prm_f @ Z
-    prm_f_err = get_err_fn(X-X_hat, inv_cov_f, Z, prm_f.size+ddof)
+    inv_zz = torch.linalg.inv(reg_fn(torch.mm(z, z.T)))
+    cov_xz = torch.mm(x, z.T)
+    prm_xz = torch.mm(cov_xz, inv_zz)
+    x_hat = torch.mm(prm_xz, z)
 
     # second stage
-    inv_cov = np.linalg.inv(np.inner(prm_f, cov_XZ))
-    prm = np.inner(Y, X_hat) @ inv_cov
-    prm_err = get_err_fn(Y-prm@X, inv_cov, X_hat, prm.size+prm_f.size+ddof)
-    return prm, prm_err, prm_f, prm_f_err
+    inv_xx = torch.linalg.inv(reg_fn(torch.mm(prm_xz, cov_xz.T)))
+    prm_yx = torch.mm(torch.mm(y, x_hat.T), inv_xx)
+    y_hat = torch.mm(prm_yx, x)
+    return prm_yx, prm_xz, y_hat, x_hat, inv_xx, inv_zz
 
 
-def wtsls(Y, X, Z, w, get_err_fn=err.hc1, ddof=0):
+def ols_only_prm(
+        y: Tensor, x: Tensor,
+        reg_fn: Callable[[Tensor], Tensor] = no_reg) -> Tensor:
     """
-    Get weighted TSLS estimate of the model ``Y = prm @ X + Y_err,
-    X = prm_f @ Z + X_err``
+    Get OLS estimate of the model ``y = prm_yx @ x + res_y``
 
     Parameters
     ----------
-    Y : ndarray(m, n)
+    y: Tensor(m, n)
         Vector of dependent variables of shape ``(m, n)``, where ``m`` is the
         number of dependent variables and ``n`` is the number of observations
-    X : ndarray(d, n)
+    x: Tensor(d, n)
         Vector of regressors of shape ``(d, n)``, where ``d`` is the
         number of regressors and ``n`` is the number of observations
-    Z : ndarray(r, n)
-        Vector of instruments of shape ``(r, n)``, where ``r`` is the
-        number of instruments and ``n`` is the number of observations
-    w : ndarray(n)
-        Vector of weights of shape ``(n,)``, where ``n`` is the number of
-        observations
-    get_err_fn : function ((m, n), (d, d), (d, n), int) -> (m, d, d)
-        Error function
-    ddof : int
-        Additional degrees of freedom that will be used to calculate errors
+    reg_fn: Callable[[Tensor], Tensor]
+        Function for covarinace matrix regularization
 
     Returns
     -------
-    prm : ndarray(m, d)
+    prm_yx: Tensor(m, d)
         Estimate of parameter vector
-    prm_err : ndarray(m, d, d)
-        Estimate of parameter vector variance
-    prm_f : ndarray(d, r)
-        Estimate of parameter vector for the first stage
-    prm_f_err : ndarray(d, r, r)
-        Estimate of parameter vector variance for the first stage
 
     Examples
     --------
-    >>> import econpy as ep
-    >>> import numpy as np
-    >>> n, r, d = 1001, 3, 2
-    >>> rng = np.random.default_rng(179)
-    >>> Z = rng.standard_normal((r, n))
-    >>> g = np.array([[1., 2., 0.],
-                      [0., 1., 1.]])
-    >>> b = np.array([[1., 2.]])
-    >>> w = rng.uniform(0, 1, n)
-    >>> X_err = rng.standard_normal((d, n))
-    >>> X = g @ Z + X_err
-    >>> Y_err = rng.standard_normal((1, n))
-    >>> Y = (b @ g) @ Z + Y_err
-    >>> ep.lin.est.wtsls(Y, X, Z, w, ep.lin.err.hc1)
-    (array([[1.05791051, 1.94524836]]),
-    array([[[ 0.00207487, -0.00232696],
-            [-0.00232696,  0.00672986]]]),
-    array([[0.95792117, 2.01579459, 0.0452929 ],
-            [0.00909182, 0.97323327, 0.97836013]]),
-    array([[[ 1.28319702e-03,  1.22815799e-04,  1.79026520e-04],
-            [ 1.22815799e-04,  1.22042438e-03,  1.91599383e-05],
-            [ 1.79026520e-04,  1.91599383e-05,  1.34582689e-03]],
-    
-            [[ 1.11670761e-03, -3.98396203e-05,  1.14882954e-04],
-            [-3.98396203e-05,  1.23630416e-03,  1.70753579e-04],
-            [ 1.14882954e-04,  1.70753579e-04,  1.38360794e-03]]]))
-
     """
-    sqrt_w = np.sqrt(w)
-    return tsls(sqrt_w * Y, sqrt_w * X, sqrt_w * Z, get_err_fn, ddof)
+    return torch.linalg.solve(
+        reg_fn(torch.mm(x, x.T)), torch.mm(y, x.T), left=False)
+
+
+def tsls_only_prm(
+        y: Tensor, x: Tensor, z: Tensor,
+        reg_fn: Callable[[Tensor, Callable], Tensor] = no_reg
+        ) -> tuple[Tensor, Tensor]:
+    """
+    Get TSLS estimate of the model
+    ``y = prm_yx @ x + res_y, x = prm_xz @ z + res_x``
+
+    Parameters
+    ----------
+    y: Tensor(m, n)
+        Vector of dependent variables of shape ``(m, n)``, where ``m`` is the
+        number of dependent variables and ``n`` is the number of observations
+    x: Tensor(d, n)
+        Vector of regressors of shape ``(d, n)``, where ``d`` is the
+        number of regressors and ``n`` is the number of observations
+    z: Tensor(r, n)
+        Vector of instruments of shape ``(r, n)``, where ``r`` is the
+        number of instruments and ``n`` is the number of observations
+    reg_fn: Callable[[Tensor], Tensor]
+        Function for covarinace matrix regularization
+
+    Returns
+    -------
+    prm_yx: Tensor(m, d)
+        Estimate of parameter vector
+    prm_xz: Tensor(d, r)
+        Estimate of parameter vector for the first stage
+
+    Examples
+    --------
+    """
+    # first stage
+    cov_xz = torch.mm(x, z.T)
+    prm_xz = torch.linalg.solve(reg_fn(torch.mm(z, z.T)), cov_xz, left=False)
+    x_hat = torch.mm(prm_xz, z)
+
+    # second stage
+    prm_yx = torch.linalg.solve(
+        reg_fn(torch.mm(prm_xz, cov_xz.T)), torch.mm(y, x_hat.T), left=False)
+    return prm_yx, prm_xz
+
+
+def ols_with_err(
+        y: Tensor, x: Tensor, w: Optional[Tensor] = None, ddof: int = 0,
+        reg_fn: Callable[[Tensor], Tensor] = no_reg,
+        err_fn: Callable[[Tensor, Tensor, Tensor, int], Tensor] = err.hc0
+        ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """
+    Get OLS estimate of the model ``y = prm_yx @ x + res_y``
+
+    Parameters
+    ----------
+    y: Tensor(m, n)
+        Vector of dependent variables of shape ``(m, n)``, where ``m`` is the
+        number of dependent variables and ``n`` is the number of observations
+    x: Tensor(d, n)
+        Vector of regressors of shape ``(d, n)``, where ``d`` is the
+        number of regressors and ``n`` is the number of observations
+    w: Optional[Tensor(n)]
+        Optional weighting vector
+    reg_fn: Callable[[Tensor], Tensor]
+        Function for covarinace matrix regularization
+    err_fn: Callable[[Tensor, Tensor, Tensor, int], Tensor]
+        Function for parameters error estimation
+
+    Returns
+    -------
+    prm_yx: Tensor(m, d)
+        Estimate of parameter vector
+    y_hat: Tensor(m, n)
+        Estimate of dependent variables
+    inv_xx: Tensor(d, d)
+        Inverse of covariance matrix of regressors
+    err_yx: Tensor(m, d, d)
+        Estimate of parameter vector errors
+
+    Examples
+    --------
+    """
+    if w is not None:
+        w = w.sqrt()
+        y = y.mul(w)
+        x = x.mul(w)
+    prm_yx, y_hat, inv_xx = ols(y, x, reg_fn)
+    err_yx = err_fn(y.sub(y_hat), inv_xx, x, ddof)
+    if w is not None:
+        y_hat.div_(w)
+    return prm_yx, y_hat, inv_xx, err_yx
+
+
+def tsls_with_err(
+        y: Tensor, x: Tensor, z: Tensor, w: Optional[Tensor] = None,
+        ddof: int = 0,
+        reg_fn: Callable[[Tensor, Callable], Tensor] = no_reg,
+        err_fn: Callable[[Tensor, Tensor, Tensor, int], Tensor] = err.hc0
+        ) -> tuple[
+            Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """
+    Get TSLS estimate of the model
+    ``y = prm_yx @ x + res_y, x = prm_xz @ z + res_x``
+
+    Parameters
+    ----------
+    y: Tensor(m, n)
+        Vector of dependent variables of shape ``(m, n)``, where ``m`` is the
+        number of dependent variables and ``n`` is the number of observations
+    x: Tensor(d, n)
+        Vector of regressors of shape ``(d, n)``, where ``d`` is the
+        number of regressors and ``n`` is the number of observations
+    z: Tensor(r, n)
+        Vector of instruments of shape ``(r, n)``, where ``r`` is the
+        number of instruments and ``n`` is the number of observations
+    w: Optional[Tensor(n)]
+        Optional weighting vector
+    reg_fn: Callable[[Tensor], Tensor]
+        Function for covarinace matrix regularization
+    err_fn: Callable[[Tensor, Tensor, Tensor, int], Tensor]
+        Function for parameters error estimation
+
+    Returns
+    -------
+    prm_yx: Tensor(m, d)
+        Estimate of parameter vector
+    prm_xz: Tensor(d, r)
+        Estimate of parameter vector for the first stage
+    y_hat: Tensor(m, n)
+        Estimate of dependent variables
+    x_hat: Tensor(d, n)
+        Estimate of endogenous variables
+    inv_xx: Tensor(d, d)
+        Inverse of covariance matrix of regressors
+    inv_zz: Tensor(r, r)
+        Inverse of covariance matrix of instruments
+    err_yx: Tensor(m, d, d)
+        Estimate of parameter vector errors
+    err_xz: Tensor(d, r, r)
+        Estimate of parameter vector errors for the first stage
+
+    Examples
+    --------
+    """
+    if w is not None:
+        w = w.sqrt()
+        y = y.mul(w)
+        x = x.mul(w)
+        z = z.mul(w)
+    prm_yx, prm_xz, y_hat, x_hat, inv_xx, inv_zz = tsls(y, x, z, reg_fn)
+    err_yx = err_fn(y.sub(y_hat), inv_xx, x_hat, ddof + x.shape[0])
+    err_xz = err_fn(x.sub(x_hat), inv_zz, z, ddof + z.shape[0])
+    if w is not None:
+        y_hat.div_(w)
+        x_hat.div_(w)
+    return prm_yx, prm_xz, y_hat, x_hat, inv_xx, inv_zz, err_yx, err_xz

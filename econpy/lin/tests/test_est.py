@@ -1,39 +1,39 @@
-import numpy as np
-from econpy.lin import est
+import torch
+from econpy.lin import est, base
 
 
-def gen_wls_data(d, n, rng):
-    X = rng.standard_normal((d, n))
-    beta = rng.uniform(0, 1, (1, d))
-    w = rng.uniform(0, 1, n)
-    return X, beta, w
+def gen_ols_data(d, n):
+    x = torch.empty((d, n), device=base.CUDA).normal_()
+    w = torch.rand((n,), device=base.CUDA)
+    prm = torch.rand((1, d), device=base.CUDA)
+    return x, prm, w
 
 
-def gen_wls_case(X, beta, rng):
-    Y_err = rng.standard_normal((1, X.shape[1]))
-    return beta @ X + Y_err
+def gen_ols_case(x, prm):
+    y_err = torch.empty((1, x.shape[1]), device=base.CUDA).normal_()
+    return prm @ x + y_err
 
 
-def gen_wtsls_data(d, r, n, rng):
-    Z = rng.standard_normal((r, n))
-    gamma = rng.uniform(0, 1, (d, r))
-    beta = rng.uniform(0, 1, (1, d))
-    beta_bias = rng.uniform(0, 1, (1, d))
-    w = rng.uniform(0, 1, n)
-    return Z, gamma, beta, beta_bias, w
+def gen_tsls_data(d, r, n):
+    z = torch.empty((r, n), device=base.CUDA).normal_()
+    w = torch.rand((n,), device=base.CUDA)
+    gamma = torch.rand((d, r), device=base.CUDA)
+    beta = torch.rand((1, d), device=base.CUDA)
+    beta_bias = torch.rand((1, d), device=base.CUDA)
+    return z, gamma, beta, beta_bias, w
 
 
-def gen_wtsls_case(Z, gamma, beta, beta_bias, rng):
-    X_err = rng.standard_normal((beta.shape[1], Z.shape[1]))
-    X = gamma @ Z + X_err
-    Y_err = rng.standard_normal((1, Z.shape[1]))
-    Y = (beta @ gamma) @ Z + beta_bias @ X_err + Y_err
-    return Y, X
+def gen_tsls_case(z, gamma, beta, beta_bias):
+    x_err = torch.empty(
+        (beta.shape[1], z.shape[1]), device=base.CUDA).normal_()
+    x = gamma @ z + x_err
+    y_err = torch.empty((1, z.shape[1]), device=base.CUDA).normal_()
+    y = (beta @ gamma) @ z + beta_bias @ x_err + y_err
+    return y, x
 
 
 def test():
-    seed = 42
-    rng = np.random.default_rng(seed)
+    base.set_deterministic_and_all_seed(42)
 
     # tests of wls and ols
 
@@ -44,15 +44,15 @@ def test():
     tries = 3
 
     for _ in range(tries):
-        X, beta, w = gen_wls_data(d, n, rng)
-        Y = gen_wls_case(X, beta, rng)
-        print("OLS estimate", est.ols(Y, X)[0])
-        print("WLS estimate", est.wls(Y, X, w)[0])
-        print("Ground truth", beta, end="\n\n")
+        x, prm, w = gen_ols_data(d, n)
+        y = gen_ols_case(x, prm)
+        print("OLS estimate", est.ols(y, x)[0])
+        print("WLS estimate", est.ols_with_err(y, x, w)[0])
+        print("Ground truth", prm, end="\n\n")
 
     for _ in range(tries):
-        Z, gamma, beta, beta_bias, w = gen_wtsls_data(d, r, n, rng)
-        Y, X = gen_wtsls_case(Z, gamma, beta, beta_bias, rng)
-        print(" TSLS estimate", est.tsls(Y, X, Z)[0])
-        print("WTSLS estimate", est.wtsls(Y, X, Z, w)[0])
+        z, gamma, beta, beta_bias, w = gen_tsls_data(d, r, n)
+        y, x = gen_tsls_case(z, gamma, beta, beta_bias)
+        print(" TSLS estimate", est.tsls(y, x, z)[0])
+        print("WTSLS estimate", est.tsls_with_err(y, x, z, w)[0])
         print("Ground truth  ", beta, end="\n\n")

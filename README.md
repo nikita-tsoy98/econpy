@@ -1,8 +1,8 @@
 # EconPy
 
 This repository contains my implementation of some popular econometric
-estimators using NumPy. The project is at a hobby level; hence, one should use
-it cautiously.
+estimators using PyTorch. The project is at a hobby level; hence, one should
+use it cautiously.
 
 ## Currently implemented
 
@@ -10,10 +10,8 @@ it cautiously.
 
 #### Estimators
 
-* OLS
-* WLS
-* TSLS (2SLS)
-* Weighted TSLS
+* OLS (and WLS)
+* TSLS (2SLS) (and weighted TSLS)
 
 #### Errors
 
@@ -27,4 +25,4 @@ it cautiously.
 
 * Absorb
 * Absorb fixed effects
-* Absorb linear trends
+* Absorb local trends
